@@ -49,7 +49,13 @@ def is_valid_file(x):
 
 def same_frame(a,b):
 	return (a)%3 == (b-2)%3
-	
+
+def gc_content(seq):
+	g = seq.count('G')
+	c = seq.count('C')
+	a = seq.count('A')
+	t = seq.count('T')
+	return round( (g+c) / (g+c+a+t) , 3)
 	
 if __name__ == '__main__':
 	usage = 'make_train.py [-opt1, [-opt2, ...]] infile'
@@ -81,6 +87,8 @@ if __name__ == '__main__':
 
 	dna = dna.replace('\n', '')
 
+	gc = gc_content(dna) 
+
 	# get which frame is the coding frame
 	coding_frame = dict()
 	for (left,right),forward in pairs.items():
@@ -102,18 +110,19 @@ if __name__ == '__main__':
 			n = (i+f)
 			window = dna[max(0+f, n-half) : n+half]
 			#print(n, window)
-			print(n+1, coding_frame.get(n, None), sep='\t', end='')
+			print(n+1, coding_frame.get(n, None), gc, sep='\t', end='')
 			freq = Counter(translate.seq(window))
+			total = sum(freq.values())
 			for aa in translate.amino_acids:
 				print('\t', end='')
-				print(freq.get(aa,0), end='')
+				print(round(freq.get(aa,0)/total, 3), end='')
 			print()	
 			#print(freq)
-			print(-(n+1), coding_frame.get(-n, None), sep='\t', end='')
+			print(-(n+1), coding_frame.get(-n, None), gc, sep='\t', end='')
 			freq = Counter(translate.seq_rev(window))
 			for aa in translate.amino_acids:
 				print('\t', end='')
-				print(freq.get(aa,0), end='')
+				print(round(freq.get(aa,0)/total, 3), end='')
 			print()	
 
 
