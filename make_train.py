@@ -101,7 +101,7 @@ if __name__ == '__main__':
 				coding_frame[ -(i + 0) * forward ] = False
 				coding_frame[ -(i + 1) * forward ] = False
 		else:
-			raise ValueError('not same')
+			raise ValueError('( %s , %s ) not same' % (left,right))
 	
 	# get the aminoacid frequency window
 	half = int(args.window / 2)

@@ -34,6 +34,8 @@ def create_model(opt):
 				  )
 	return model
 
+def pack(features, label):
+  return tf.stack(list(features.values()), axis=-1), label
 
 def xsmooth(data):
 	out = np.zeros_like(data)
@@ -54,6 +56,7 @@ def xsmooth(data):
 			out[6*i+idx] = 2
 	return out
 
+
 if __name__ == '__main__':
 	usage = '%s [-opt1, [-opt2, ...]] infile' % __file__
 	parser = argparse.ArgumentParser(description='', formatter_class=RawTextHelpFormatter, usage=usage)
@@ -61,19 +64,33 @@ if __name__ == '__main__':
 	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write the output [stdout]')
 	args = parser.parse_args()
 
-	train = pd.read_csv(sys.argv[1], header=None, sep='\t')
-	X = train.iloc[:,2:26]
-	Y = train.iloc[:,1].replace({'None':0, 'False':1, 'True':2})
+	tfiles = tf.data.experimental.make_csv_dataset(
+		file_pattern = "test/*.tsv",
+		field_delim='\t',
+		header=False,
+		column_names=['ID', 'TYPE','GC','#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'],
+		batch_size=8, num_epochs=1,
+		num_parallel_reads=20,
+		shuffle_buffer_size=10000,
+		select_columns=['TYPE','GC','#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'],
+		label_name='TYPE'
+		)
 
-	'''
+	pdata = tfiles.map(pack)
+	#for feature in tfiles.take(1):
+	#	print( feature )
+
 	cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='cp.ckpt', save_weights_only=True, verbose=1)
 	model = create_model('adam')
-	model.fit(X, Y, epochs=11, callbacks=[cp_callback])
-	'''
+	model.fit(pdata, epochs=5, callbacks=[cp_callback])
 
-	model = create_model('adam')
-	model.load_weights('cp.ckpt')
-
+	#model = create_model('adam')
+	#model.load_weights('cp.ckpt')
+	
+	
+	train = pd.read_csv(sys.argv[1], header=None, sep='\t')
+	X = tf.stack(train.iloc[:,2:26])
+	#Y = train.iloc[:,1].replace({'None':0, 'False':1, 'True':2})
 	p = model.predict(X)
 	f = np.argmax(p,axis=-1)
 	#smooth(f)
