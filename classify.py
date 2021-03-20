@@ -9,6 +9,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 
 # Helper libraries
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -23,9 +25,10 @@ def create_model(opt):
 	This creates and returns a new model
 	'''
 	model = tf.keras.Sequential([
-					tf.keras.layers.Dense(24, input_shape=(24,)),
-					tf.keras.layers.Dense(128, activation='relu'),
-					tf.keras.layers.Dense(128, activation='relu'),
+					#tf.keras.layers.Dense(24, input_shape=(24,)),
+					tf.keras.layers.Dense(47, input_shape=(47,)),
+					tf.keras.layers.Dense(256, activation='relu'),
+					tf.keras.layers.Dense(246, activation='relu'),
 					tf.keras.layers.Dense(10, activation='softmax')
 	])
 	model.compile(optimizer = opt,
@@ -64,15 +67,16 @@ if __name__ == '__main__':
 	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write the output [stdout]')
 	args = parser.parse_args()
 
+	letters = ['#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 	tfiles = tf.data.experimental.make_csv_dataset(
-		file_pattern = "test/*.tsv",
+		file_pattern = "test2/*.tsv",
 		field_delim='\t',
 		header=False,
-		column_names=['ID', 'TYPE','GC','#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'],
+		column_names= ['ID', 'TYPE','GC'] + [letter for pair in zip([l+'a' for l in letters], [l+'b' for l in letters]) for letter in pair],
 		batch_size=8, num_epochs=1,
 		num_parallel_reads=20,
 		shuffle_buffer_size=10000,
-		select_columns=['TYPE','GC','#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'],
+		select_columns=['TYPE','GC'] + [letter for pair in zip([l+'a' for l in letters], [l+'b' for l in letters]) for letter in pair],
 		label_name='TYPE'
 		)
 
@@ -82,19 +86,19 @@ if __name__ == '__main__':
 
 	cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='cp.ckpt', save_weights_only=True, verbose=1)
 	model = create_model('adam')
-	model.fit(pdata, epochs=5, callbacks=[cp_callback])
+	model.fit(pdata, epochs=9, callbacks=[cp_callback])
 
 	#model = create_model('adam')
 	#model.load_weights('cp.ckpt')
 	
 	
 	train = pd.read_csv(sys.argv[1], header=None, sep='\t')
-	X = tf.stack(train.iloc[:,2:26])
+	X = tf.stack(train.iloc[:,2:])
 	#Y = train.iloc[:,1].replace({'None':0, 'False':1, 'True':2})
 	p = model.predict(X)
 	f = np.argmax(p,axis=-1)
 	#smooth(f)
-	ff = xsmooth(f)
+	ff = f #xsmooth(f)
 	
 	for row in zip(train.iloc[:,0].to_list(), ff):
 		if row[1] == 2:
