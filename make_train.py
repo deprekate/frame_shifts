@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import io
 import sys
 import re
 from math import log
@@ -16,6 +17,9 @@ class Translate:
 		amino_acids = 'FFLLSSSSYY#+CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG'
 		self.translate = dict(zip(codons, amino_acids))
 		self.amino_acids = sorted(set(amino_acids))
+		for c in '#+*':
+			self.amino_acids.remove(c)
+
 
 	def codon(self, codon):
 		codon = codon.upper()
@@ -28,9 +32,11 @@ class Translate:
 
 	def frequencies(self, seq, rev=False):
 		counts = self.counts(seq, rev=rev)
+		for c in '#+*':
+			del counts[c]
 		total = sum(counts.values())
 		for aa in counts:
-			counts[aa] = counts[aa] / total
+			counts[aa] = round(counts[aa] / total , 4)
 		return counts
 
 	def seq(self, seq, rev=False):
@@ -79,37 +85,56 @@ def gc_content(seq):
 	t = seq.count('T')
 	return round( (g+c) / (g+c+a+t) , 3)
 
+def our_generator():
+    for i in range(1000):
+      x = np.random.rand(28,28)
+      y = np.random.randint(1,10, size=1)
+      yield x,y
 
-if __name__ == '__main__':
-	usage = 'make_train.py [-opt1, [-opt2, ...]] infile'
-	parser = argparse.ArgumentParser(description='', formatter_class=RawTextHelpFormatter, usage=usage)
-	parser.add_argument('infile', type=is_valid_file, help='input file in genbank format')
-	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write the output [stdout]')
-	parser.add_argument('-w', '--window', action="store", type=int, default=120,  help='The size of the window')
-	parser.add_argument('-l', '--labels', action="store_true", help=argparse.SUPPRESS)
-	parser.add_argument('--ids', action="store", help=argparse.SUPPRESS)
-	args = parser.parse_args()
+def read_fasta(filepath, base_trans=str.maketrans('','')):
+	contigs_dict = dict()
+	name = ''
+	seq = ''
 
-	translate = Translate()
-	if args.labels:
-		print("\t".join(['ID','TYPE','GC'] + translate.amino_acids))
-		exit()
+	lib = gzip if filepath.endswith(".gz") else io
+	with lib.open(filepath, mode="rb") as f:
+		for line in f:
+			if line.startswith(b'>'):
+				contigs_dict[name] = seq
+				name = line[1:].decode("utf-8").split()[0]
+				seq = ''
+			else:
+				#seq += line.replace("\n", "").upper()
+				seq += line[:-1].decode("utf-8").upper()
+		contigs_dict[name] = seq.translate(base_trans)
+	if '' in contigs_dict: del contigs_dict['']
+	return contigs_dict
+
+def read_genbank(infile):
 	dna = ''
-	flag = False
-	pairs = dict()
-
-	with open(args.infile) as fp:
+	coding_frame = dict()
+	with open(infile) as fp:
 		for line in fp:
 			if line.startswith('     CDS '):
-				m = re.findall(r"\d+\.\.\d+", line)
-				for pair in m:
-					left,right = map(int, pair.split('..'))
-					if 'join' in line and ',1..' in line:
-						if left == 1:
-							left = right%3 + 1
-						else:
-							right = right - ((right-left)%3 +1)
-					pairs[tuple([left,right])] = -1 if 'complement' in line else 1
+				direction = -1 if 'complement' in line else 1
+				pairs = [pair.split('..') for pair in re.findall(r"<*\d+\.\.>*\d+", line)]
+				if ',1)' in line:
+					pairs.append(['1','1'])
+				remainder = 0
+				for pair in pairs:
+					left,right = map(int, [ item.replace('<','').replace('>','') for item in pair ] )
+					if pair[0] == '<1':
+						left = right % 3 + 1
+					for i in range(left-remainder,right-1,3):
+						coding_frame[ +(i + 0) * direction ] = 2 #True
+						coding_frame[ +(i + 1) * direction ] = 1 #False
+						coding_frame[ +(i + 2) * direction ] = 1 #False
+						coding_frame[ -(i + 0) * direction ] = 1 #False
+						coding_frame[ -(i + 1) * direction ] = 1 #False
+						coding_frame[ -(i + 2) * direction ] = 1 #False
+						remainder = right-2 - i
+				if remainder and ">" not in pair[1]:
+					raise ValueError("Out of frame: ( %s , %s )" % tuple(pair))
 			elif line.startswith('ORIGIN'):
 				dna = '\n'
 			elif dna:
@@ -120,50 +145,79 @@ if __name__ == '__main__':
 
 	gc = gc_content(dna) 
 
-	# get which frame is the coding frame
-	coding_frame = dict()
-	for (left,right),forward in pairs.items():
-		if same_frame(left,right):
-			for i in range(left, right, 3):
-				coding_frame[ +(i - 1) * forward ] = True
-				coding_frame[ +(i + 0) * forward ] = False
-				coding_frame[ +(i + 1) * forward ] = False
-				coding_frame[ -(i - 1) * forward ] = False
-				coding_frame[ -(i + 0) * forward ] = False
-				coding_frame[ -(i + 1) * forward ] = False
-		else:
-			raise ValueError('( %s , %s ) not same' % (left,right))
-	
+	for i, row in enumerate(get_windows(dna), start=1):
+		pos = -((i+1)//2) if (i+1)%2 else ((i+1)//2)
+		yield [coding_frame.get(pos, 0)] + row
+
+def get_windows(dna):
+	'''
+	This method takes as input a string of the nucleotides, and returns
+	the amino-acid frequencies of a window centered at each potential codon
+	position.  The positions are forward and reverse interlaced and so the
+	rows follow the pattern:
+		+1 -1 +2 -2 +3 -3 +4 -4 +5 -5 +6 -6 +7 -7 etc
+
+	The row consists of 41 columns, where the first column is the GC content
+	and the other 40 are the amino-acid frequencies, and are interlaced by
+	those before and those after the codon:
+		A(before) A(after) C(before) C(after) D(before) D(after) etc
+	'''
+	if type(dna) is not str:
+		dna = dna.decode()
+
+	translate = Translate()
+	gc = gc_content(dna) 
+
 	# get the aminoacid frequency window
+	args = lambda: None
+	args.window = 120
 	half = int(args.window / 2)
 	for i in range(0, len(dna)-2, 3):
 		for f in [0,1,2]:
 			n = (i+f)
-			window = dna[max(0+f, n-half) : n+half]
-			befor = dna[max(0+f, n-half) : n]
-			after = dna[n : n+half]
-			#print(n, window)
-			print(n+1, coding_frame.get(n, None), gc, sep='\t', end='')
-			freqs = translate.frequencies(window)
-			fb = translate.frequencies(befor)
-			fa = translate.frequencies(after)
+			#window = dna[max(0+f, n-half) : n+half]
+			befor = dna[ max(0+f,n-half) : n      ]
+			after = dna[         n       : n+half ]
+			#freqs = translate.frequencies(window)
+			bef = translate.frequencies(befor)
+			aft = translate.frequencies(after)
 			#freqs = translate.edp(window)
+			row = [gc]
 			for aa in translate.amino_acids:
-				print('\t', end='')
-				#print(round(freqs.get(aa,0), 4), end='')
-				print(round(fb.get(aa,0), 4), '\t', round(fa.get(aa,0), 4), sep='',end='')
-			print()	
-			#print(freq)
-			print(-(n+1), coding_frame.get(-n, None), gc, sep='\t', end='')
-			freqs = translate.frequencies(window, rev=True)
-			fb = translate.frequencies(befor, rev=True)
-			fa = translate.frequencies(after, rev=True)
+				row.append(bef.get(aa,0))
+				row.append(aft.get(aa,0))
+			yield  row
+			#freqs = translate.frequencies(window, rev=True)
+			bef = translate.frequencies(befor, rev=True)
+			aft = translate.frequencies(after, rev=True)
 			#freqs = translate.edp(window, rev=True)
+			row = [gc]
 			for aa in translate.amino_acids:
-				print('\t', end='')
-				#print(round(freqs.get(aa,0), 4), end='')
-				print(round(fb.get(aa,0), 4), '\t', round(fa.get(aa,0), 4), sep='',end='')
-			print()	
+				row.append(bef.get(aa,0))
+				row.append(aft.get(aa,0))
+			yield row
+
+
+
+if __name__ == '__main__':
+	usage = 'make_train.py [-opt1, [-opt2, ...]] infile'
+	parser = argparse.ArgumentParser(description='', formatter_class=RawTextHelpFormatter, usage=usage)
+	parser.add_argument('infile', type=is_valid_file, help='input file in genbank format')
+	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write the output [stdout]')
+	parser.add_argument('-w', '--window', action="store", type=int, default=120,  help='The size of the window')
+	parser.add_argument('-l', '--labels', action="store_true", help=argparse.SUPPRESS)
+	parser.add_argument('--ids', action="store", help=argparse.SUPPRESS)
+	args = parser.parse_args()
+	
+
+	if os.path.isdir(args.infile):
+		raise NotImplementedError('Running on multiple files in a directory')
+	else:
+		for row in read_genbank(args.infile):
+			args.outfile.write('\t'.join(map(str,row)))
+			args.outfile.write('\n')
+
+
 
 
 

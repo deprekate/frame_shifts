@@ -4,6 +4,8 @@ import argparse
 from argparse import RawTextHelpFormatter
 from statistics import mode
 
+import make_train as mt
+
 # TensorFlow and tf.keras
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -40,7 +42,7 @@ def create_model(opt):
 def pack(features, label):
   return tf.stack(list(features.values()), axis=-1), label
 
-def xsmooth(data):
+def smooth(data):
 	out = np.zeros_like(data)
 	var = np.array([
 					data[0::6], 
@@ -52,60 +54,59 @@ def xsmooth(data):
 					])
 	for i in range(var.shape[1]):
 		#print(var[:,max(i-2, 0) : i+3])
-		counts = np.count_nonzero(var[:,max(i-4, 0) : i+5] == 2, axis=1)
+		counts = np.count_nonzero(var[:,max(i-19, 0) : i+20] == 2, axis=1)
 		idx = np.argmax(counts)
 		#idx = np.argmax(np.count_nonzero(var[:,max(i-2, 0) : i+3] == 2, axis=1))
 		if counts[idx] >= 3:
 			out[6*i+idx] = 2
 	return out
 
+def gen_series():
+  i = 0
+  while True:
+    size = np.random.randint(0, 10)
+    yield [i, np.random.normal(size=(size,))]
+    i += 1
+
 
 if __name__ == '__main__':
 	usage = '%s [-opt1, [-opt2, ...]] infile' % __file__
 	parser = argparse.ArgumentParser(description='', formatter_class=RawTextHelpFormatter, usage=usage)
 	parser.add_argument('infile', type=is_valid_file, help='input file')
-	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write the output [stdout]')
+	parser.add_argument('-o', '--outfile', action="store", default=sys.stdout, type=argparse.FileType('w'), help='where to write output [stdout]')
 	args = parser.parse_args()
+	'''
+	if args.labels: print("\t".join(['ID','TYPE','GC'] + translate.amino_acids))
+		exit()
+	'''
 
-	letters = ['#', '*', '+', 'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
-	tfiles = tf.data.experimental.make_csv_dataset(
-		file_pattern = "test2/*.tsv",
-		field_delim='\t',
-		header=False,
-		column_names= ['ID', 'TYPE','GC'] + [letter for pair in zip([l+'a' for l in letters], [l+'b' for l in letters]) for letter in pair],
-		batch_size=8, num_epochs=1,
-		num_parallel_reads=20,
-		shuffle_buffer_size=10000,
-		select_columns=['TYPE','GC'] + [letter for pair in zip([l+'a' for l in letters], [l+'b' for l in letters]) for letter in pair],
-		label_name='TYPE'
-		)
-
-	pdata = tfiles.map(pack)
-	#for feature in tfiles.take(1):
-	#	print( feature )
-
-	cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='cp.ckpt', save_weights_only=True, verbose=1)
 	model = create_model('adam')
-	model.fit(pdata, epochs=9, callbacks=[cp_callback])
-
-	#model = create_model('adam')
-	#model.load_weights('cp.ckpt')
+	model.load_weights('small.ckpt')
 	
+	contigs = mt.read_fasta(args.infile)
+	for header in contigs:
+		dataset = tf.data.Dataset.from_generator(
+								mt.get_windows,
+								args=[contigs[header]],
+								output_types=tf.float32,
+								output_shapes = (41,) 
+								).batch(10)
+		#for feature in train.take(1):
+		#	print( feature )
+		#exit()
 	
-	train = pd.read_csv(sys.argv[1], header=None, sep='\t')
-	X = tf.stack(train.iloc[:,2:])
-	#Y = train.iloc[:,1].replace({'None':0, 'False':1, 'True':2})
-	p = model.predict(X)
-	f = np.argmax(p,axis=-1)
-	#smooth(f)
-	ff = f #xsmooth(f)
+		p = model.predict(dataset)
+		Y = np.argmax(p,axis=-1)
 	
-	for row in zip(train.iloc[:,0].to_list(), ff):
-		if row[1] == 2:
-			if row[0] > 0:
-				print('     CDS             ', row[0] , '..', row[0]+2, sep='')
-			else:
-				print('     CDS             complement(', abs(row[0]), '..', abs(row[0])+2, ')', sep='')
+		Y = smooth(Y)
+	
+		#for row in zip(train.iloc[:,0].to_list(), Y):
+		for i,row in enumerate(Y):
+			if row == 2:
+				if i%2:
+					print('     CDS             complement(', ((i-1)//2)+1, '..', ((i-1)//2)+3, ')', sep='')
+				else:
+					print('     CDS             ', (i//2)+1 , '..', (i//2)+3, sep='')
 
 
 
